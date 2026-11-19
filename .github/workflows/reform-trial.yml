@@ -2,7 +2,7 @@ name: MNT Reform 2 trial build
 
 # Fork-only trial. It builds the bootable arm64 image (target `default`) with the i.MX8MQ kernel
 # and publishes a test image to the registry of the repository it runs in.
-# It reads the public build cache and writes none. Remove this file before the
+# It reads the public build cache and writes only to the registry of this repository. Remove this file before the
 # change goes upstream.
 on:
   push:
@@ -15,7 +15,7 @@ permissions:
 env:
   IMAGE_REPO: ghcr.io/${{ github.repository }}
   # <base release>-<label>. Change the label for every new test image.
-  TEST_TAG: v0.6.6-imx8mq-2
+  TEST_TAG: v0.6.6-imx8mq-3
   CACHE: quay.io/kairos/hadron-build-cache
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: 0
         run: |
-          cache=""
+          cache="--cache-from type=registry,ref=${IMAGE_REPO}:buildcache-arm64"
           for stage in stage0 stage1-merge rsync cmake kernel-misc-default systemd python-build toolchain container bios-default-no-fips; do
             cache="$cache --cache-from type=registry,ref=${CACHE}:${stage}-arm64"
           done
@@ -62,14 +62,18 @@ jobs:
             --build-arg VERSION="${TEST_TAG}" \
             --build-arg JOBS="$(nproc)" \
             $cache \
+            --cache-to "type=registry,ref=${IMAGE_REPO}:buildcache-arm64,mode=max,ignore-error=true" \
             --tag "${IMAGE_REPO}:${TEST_TAG}" \
             --push \
             .
-      - name: Show the kernel and the device tree
+      - name: Check the kernel, the device tree and the board driver
         run: |
           docker pull -q "${IMAGE_REPO}:${TEST_TAG}"
           id=$(docker create "${IMAGE_REPO}:${TEST_TAG}" /bin/true)
-          docker export "$id" | tar -tvf - | grep -E '(^|/)boot/(vmlinuz|Image|dtb/.*reform)' | tee /tmp/boot-files.txt
-          # The target `container` has no kernel. Fail when the device tree is not in the image.
-          grep -q 'boot/dtb/freescale/imx8mq-mnt-reform2.dtb' /tmp/boot-files.txt
+          docker export "$id" | tar -tf - > /tmp/files.txt
           docker rm "$id" >/dev/null
+          grep -E '^(\./)?boot/|reform' /tmp/files.txt
+          # The target `container` has no kernel. Fail when one of these is not in the image.
+          grep -qE '^(\./)?boot/vmlinuz-' /tmp/files.txt
+          grep -qE '^(\./)?boot/dtb/freescale/imx8mq-mnt-reform2\.dtb$' /tmp/files.txt
+          grep -qE '^(\./)?usr/lib/modules/[^/]+/updates/reform2_lpc\.ko\.zst$' /tmp/files.txt
