@@ -2334,6 +2334,18 @@ RUN if [ ${ARCH} = "aarch64" ]; then \
     fi
 # link vmlinuz to our kernel
 RUN ln -sfv /kernel/vmlinuz-$(cat /kernel/kernel-release) /kernel/vmlinuz
+# Device trees for the arm64 boards this kernel has board support for. A board whose
+# firmware is U-Boot gets its device tree from a file, not from the firmware, so the
+# file has to come from the same build as the kernel. /kernel ends up as /boot in the
+# image, so the files are at /boot/dtb/<vendor>/<board>.dtb. Other architectures and
+# boards with ACPI firmware need none, and get none.
+ARG ARM64_DTBS="freescale/imx8mq-mnt-reform2.dtb"
+RUN if [ ${ARCH} = "aarch64" ] && [ -n "${ARM64_DTBS}" ]; then \
+    ARCH=arm64 make -s -j${KERNEL_JOBS:-$(nproc)} ${MAX_LOAD:+-l${MAX_LOAD}} HOSTCFLAGS='-D__attribute_const__=' ${ARM64_DTBS} && \
+    for d in ${ARM64_DTBS}; do \
+        mkdir -p /kernel/dtb/$(dirname $d) && cp arch/arm64/boot/dts/$d /kernel/dtb/$d; \
+    done; \
+    fi
 
 # The modules are built here, in the same stage lineage as the kernel image, and both
 # travel together from this point on. CONFIG_MODULE_SIG_KEY points at certs/signing_key.pem,
