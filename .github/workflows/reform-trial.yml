@@ -1,0 +1,70 @@
+name: MNT Reform 2 trial build
+
+# Fork-only trial. It builds the arm64 container image with the i.MX8MQ kernel
+# and publishes a test image to the registry of the repository it runs in.
+# It reads the public build cache and writes none. Remove this file before the
+# change goes upstream.
+on:
+  push:
+    branches: [feat/imx8mq-mnt-reform2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REPO: ghcr.io/${{ github.repository }}
+  # <base release>-<label>. Change the label for every new test image.
+  TEST_TAG: v0.6.6-imx8mq-1
+  CACHE: quay.io/kairos/hadron-build-cache
+
+jobs:
+  container:
+    name: Build the container image (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render Dockerfile
+        uses: ./.github/actions/render-dockerfile
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Log in to the registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Refuse to reuse a tag
+        run: |
+          if docker buildx imagetools inspect "${IMAGE_REPO}:${TEST_TAG}" >/dev/null 2>&1; then
+            echo "tag ${TEST_TAG} exists already, change TEST_TAG" >&2
+            exit 1
+          fi
+      - name: Build and push
+        env:
+          SOURCE_DATE_EPOCH: 0
+        run: |
+          cache=""
+          for stage in stage0 stage1-merge rsync cmake kernel-misc-default systemd python-build toolchain container; do
+            cache="$cache --cache-from type=registry,ref=${CACHE}:${stage}-arm64"
+          done
+          # shellcheck disable=SC2086
+          docker buildx build \
+            --platform linux/arm64 \
+            --target container \
+            --build-arg ARCH=aarch64 \
+            --build-arg BUILD_ARCH=aarch64 \
+            --build-arg VERSION="${TEST_TAG}" \
+            --build-arg JOBS="$(nproc)" \
+            $cache \
+            --tag "${IMAGE_REPO}:${TEST_TAG}" \
+            --push \
+            .
+      - name: Show the kernel and the device tree
+        run: |
+          docker pull -q "${IMAGE_REPO}:${TEST_TAG}"
+          id=$(docker create "${IMAGE_REPO}:${TEST_TAG}" /bin/true)
+          docker export "$id" | tar -tvf - | grep -E '(^|/)boot/(vmlinuz|Image|dtb/.*reform)' || true
+          docker rm "$id" >/dev/null
