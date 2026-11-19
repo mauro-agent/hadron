@@ -2373,6 +2373,21 @@ RUN if [ ${ARCH} = "aarch64" ]; then \
     else \
     export ARCH=x86_64;\
     fi;  ZSTD_CLEVEL=19 INSTALL_MOD_PATH="/modules" INSTALL_MOD_STRIP=1 make -s -j${KERNEL_JOBS:-$(nproc)} ${MAX_LOAD:+-l${MAX_LOAD}} modules_install
+# Board drivers that are not in the kernel tree, for the arm64 boards of ARM64_DTBS.
+# reform2_lpc is the driver for the system controller of the MNT Reform 2 (battery,
+# charger and power off, over SPI). It is built here, against the tree that built the
+# kernel, so that it has the same version string and the signature of this build. The
+# install step puts it in updates/ and runs depmod again. The source is from
+# https://source.mnt.re/reform/reform-tools (lpc/reform2_lpc.c, GPL-2.0).
+COPY files/kernel/modules /sources/kernel-extra-modules
+RUN if [ ${ARCH} = "aarch64" ]; then \
+    export ARCH=arm64; \
+    for m in /sources/kernel-extra-modules/*/; do \
+        make -s -j${KERNEL_JOBS:-$(nproc)} HOSTCFLAGS='-D__attribute_const__=' M=${m%/} modules && \
+        ZSTD_CLEVEL=19 INSTALL_MOD_PATH="/modules" INSTALL_MOD_STRIP=1 make -s M=${m%/} modules_install || exit 1; \
+    done; \
+    test -s /modules/lib/modules/$(cat /kernel/kernel-release)/updates/reform2_lpc.ko.zst; \
+    fi
 
 # What the rest of the build takes from the kernel is /kernel and /modules, a few
 # hundred MB. kernel-modules, which holds them, is more than 20 GB of layers: the
